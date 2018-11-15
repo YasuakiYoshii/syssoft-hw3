@@ -16,7 +16,7 @@ public class Opfs implements Filesystem {
 
     public int do_diskinfo(img_t img, int argc, String argv[]) {
         if (argc != 0) {
-            error("usage: %s img_file diskinfo\n", progname);
+            error("usage: " + progname + " img_file diskinfo");
             return EXIT_FAILURE;
         }
 
