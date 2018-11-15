@@ -1,4 +1,6 @@
-public class Libfs {
+import java.nio.MappedByteBuffer;
+
+public class Libfs implements Filesystem{
     /* img file structure
      *
      *  0    1    2           i           m           d        N-1
@@ -64,6 +66,20 @@ public class Libfs {
      * General mathematical functions
      */
 
+
+    /* fs.h */
+
+
+    // Block containing inode i
+    int BLOCK(int i, Superblock sb) {
+        return ((i) / IPB + sb.inodestart);
+    }
+
+    // Block of free map containing bit for block b
+    int BBLOCK(int b, Superblock sb) {
+        return (b/BPB + sb.bmapstart);
+    }
+
     /* libfs.h */
     static final int T_DIR = 1;
     static final int T_FILE = 2;
@@ -72,7 +88,23 @@ public class Libfs {
     static final int MAXFILESIZE = (MAXFILE * BSIZE);
     static final int BUFSIZE  = 1024;
 
-    static int divceil(int x, int y) {
+    // inode
+    class inode_t {
+        dinode[] dinodes;
+    }
+
+    static Superblock SBLK(MappedByteBuffer img) {
+        return img[1];
+    }
+
+
+
+
+
+
+
+
+    private static int divceil(int x, int y) {
         return (x + y - 1) / y;
     }
 
@@ -94,31 +126,31 @@ public class Libfs {
     static String progname;
     jmp_buf fatal_exception_buf;
 
-    void debug_message(final String tag, final String... fmt) {
-        va_list args;
-        va_start(args, fmt);
-        fprintf(stderr, "%s: ", tag);
-        vfprintf(stderr, fmt, args);
-        va_end(args);
+    static public void debug_message(final String tag, final String fmt, Object... args) {
+        String str = String.format(tag + ": " + fmt, args);
+        System.err.println(str);
     }
 
-    void error(final String... fmt) {
-        va_list args;
-        va_start(args, fmt);
-        vfprintf(stderr, fmt, args);
-        va_end(args);
+    static private void derror(final String fmt, Object... args) {
+        debug_message("ERROR", fmt, args);
     }
 
-    void fatal(final String... fmt) {
-        va_list args;
-        va_start(args, fmt);
-        fprintf(stderr, "FATAL: ");
-        vfprintf(stderr, fmt, args);
-        va_end(args);
+    static private void dwarn(final String fmt, Object... args) {
+        debug_message("WARNING", fmt, args);
+    }
+
+    public static void error(final String fmt, Object... args) {
+        String str = String.format(fmt, args);
+        System.err.println(str);
+    }
+
+    public static void fatal(final String fmt, Object... args) {
+        String str = String.format("FATAL: " + fmt, args);
+        System.err.println(str);
         longjmp(fatal_exception_buf, 1);
     }
 
-    String typename(int type) {
+    public static String typename(int type) {
         switch (type) {
             case T_DIR:
                 return "directory";
@@ -137,7 +169,7 @@ public class Libfs {
      */
 
     // checks if b is a valid data block number
-    boolean valid_data_block(img_t img, int b) {
+    public static boolean valid_data_block(MappedByteBuffer img, int b) {
     final int Nl = SBLK(img).nlog;                    // # of log blocks
     final int Ni = SBLK(img).ninodes / IPB + 1;       // # of inode blocks
     final int Nm = SBLK(img).size / (BSIZE * 8) + 1;  // # of bitmap blocks
@@ -147,7 +179,7 @@ public class Libfs {
     }
 
     // allocates a new data block and returns its block number
-    int balloc(img_t img) {
+    static int balloc(MappedByteBuffer img) {
         for (int b = 0; b < SBLK(img).size; b += BPB) {
             String bp = img[BBLOCK(b, SBLKS(img))];
             for (int bi = 0; bi < BPB && b + bi < SBLK(img).size; bi++) {
@@ -163,21 +195,21 @@ public class Libfs {
                 }
             }
         }
-        fatal("balloc: no free blocks\n");
+        fatal("balloc: no free blocks");
         return 0; // dummy
     }
 
     // frees the block specified by b
-    int bfree(img_t img, uint b) {
+    static int bfree(MappedByteBuffer img, int b) {
         if (!valid_data_block(img, b)) {
-            derror("bfree: %u: invalid data block number\n", b);
+            derror("bfree: %u: invalid data block number", b);
             return -1;
         }
         String bp = img[BBLOCK(b, SBLKS(img))];
         int bi = b % BPB;
         int m = 1 << (bi % 8);
         if ((bp[bi / 8] & m) == 0)
-            dwarn("bfree: %u: already freed block\n", b);
+            dwarn("bfree: %u: already freed block", b);
         bp[bi / 8] &= ~m;
         return 0;
     }
@@ -187,32 +219,32 @@ public class Libfs {
      * Basic operations on files (inodes)
      */
 
-// inode of the root directory
-final int root_inode_number = 1;
-    inode_t root_inode;
+    // inode of the root directory
+    static int root_inode_number = 1;
+    static inode_t root_inode;
 
     // returns the pointer to the inum-th dinode structure
-    inode_t iget(img_t img, int inum) {
+    static inode_t iget(MappedByteBuffer img, int inum) {
         if (0 < inum && inum < SBLK(img).ninodes)
         return (inode_t)img[IBLOCK(inum, SBLKS(img))] + inum % IPB;
-        derror("iget: %u: invalid inode number\n", inum);
-        return NULL;
+        derror("iget: %u: invalid inode number", inum);
+        return null;
     }
 
     // retrieves the inode number of a dinode structure
-    int geti(img_t img, inode_t ip) {
+    static int geti(MappedByteBuffer img, inode_t ip) {
         int Ni = SBLK(img).ninodes / IPB + 1;       // # of inode blocks
         for (int i = 0; i < Ni; i++) {
             inode_t bp = (inode_t)img[SBLK(img).inodestart + i];
             if (bp <= ip && ip < bp + IPB)
                 return ip - bp + i * IPB;
         }
-        derror("geti: %p: not in the inode blocks\n", ip);
+        derror("geti: %p: not in the inode blocks", ip);
         return 0;
     }
 
     // allocate a new inode structure
-    inode_t ialloc(img_t img, int type) {
+    static inode_t ialloc(MappedByteBuffer img, int type) {
         for (int inum = 1; inum < SBLK(img).ninodes; inum++) {
             inode_t ip = (inode_t)img[IBLOCK(inum, SBLKS(img))] + inum % IPB;
             if (ip.type == 0) {
@@ -221,25 +253,25 @@ final int root_inode_number = 1;
                 return ip;
             }
         }
-        fatal("ialloc: cannot allocate\n");
+        fatal("ialloc: cannot allocate");
         return null;
     }
 
     // frees inum-th inode
-    int ifree(img_t img, int inum) {
+    static int ifree(MappedByteBuffer img, int inum) {
         inode_t ip = iget(img, inum);
         if (ip == null)
             return -1;
         if (ip.type == 0)
-            dwarn("ifree: inode #%d is already freed\n", inum);
+            dwarn("ifree: inode #%d is already freed", inum);
         if (ip.nlink > 0)
-            dwarn("ifree: nlink of inode #%d is not zero\n", inum);
+            dwarn("ifree: nlink of inode #%d is not zero", inum);
         ip.type = 0;
         return 0;
     }
 
     // returns n-th data block number of the file specified by ip
-    int bmap(img_t img, inode_t ip, int n) {
+    static int bmap(MappedByteBuffer img, inode_t ip, int n) {
         if (n < NDIRECT) {
             int addr = ip.addrs[n];
             if (addr == 0) {
@@ -251,7 +283,7 @@ final int root_inode_number = 1;
         else {
             int k = n - NDIRECT;
             if (k >= NINDIRECT) {
-                derror("bmap: %u: invalid index number\n", n);
+                derror("bmap: %u: invalid index number", n);
                 return 0;
             }
             int iaddr = ip.addrs[NDIRECT];
@@ -259,7 +291,7 @@ final int root_inode_number = 1;
                 iaddr = balloc(img);
                 ip.addrs[NDIRECT] = iaddr;
             }
-            int *iblock = (int *)img[iaddr];
+            int[] iblock = (int [])img[iaddr];
             if (iblock[k] == 0)
                 iblock[k] = balloc(img);
             return iblock[k];
@@ -267,7 +299,7 @@ final int root_inode_number = 1;
     }
 
     // reads n byte of data from the file specified by ip
-    int iread(img_t img, inode_t ip, String buf, int n, int off) {
+    static int iread(MappedByteBuffer img, inode_t ip, String buf, int n, int off) {
         if (ip.type == T_DEV)
             return -1;
         if (off > ip.size || off + n < off)
@@ -280,17 +312,17 @@ final int root_inode_number = 1;
         for (int m = 0; t < n; t += m, off += m, buf += m) {
             int b = bmap(img, ip, off / BSIZE);
             if (!valid_data_block(img, b)) {
-                derror("iread: %u: invalid data block\n", b);
+                derror("iread: %u: invalid data block", b);
                 break;
             }
-            m = min(n - t, BSIZE - off % BSIZE);
+            m = Math.min(n - t, BSIZE - off % BSIZE);
             memmove(buf, img[b] + off % BSIZE, m);
         }
         return t;
     }
 
     // writes n byte of data to the file specified by ip
-    int iwrite(img_t img, inode_t ip, String buf, int n, int off) {
+    static int iwrite(MappedByteBuffer img, inode_t ip, String buf, int n, int off) {
         if (ip.type == T_DEV)
             return -1;
         if (off > ip.size || off + n < off || off + n > MAXFILESIZE)
@@ -301,10 +333,10 @@ final int root_inode_number = 1;
         for (int m = 0; t < n; t += m, off += m, buf += m) {
             int b = bmap(img, ip, off / BSIZE);
             if (!valid_data_block(img, b)) {
-                derror("iwrite: %u: invalid data block\n", b);
+                derror("iwrite: %u: invalid data block", b);
                 break;
             }
-            m = min(n - t, BSIZE - off % BSIZE);
+            m = Math.min(n - t, BSIZE - off % BSIZE);
             memmove(img[b] + off % BSIZE, buf, m);
         }
         if (t > 0 && off > ip.size)
@@ -313,7 +345,7 @@ final int root_inode_number = 1;
     }
 
     // truncate the file specified by ip to size
-    int itruncate(img_t img, inode_t ip, int size) {
+    static int itruncate(MappedByteBuffer img, inode_t ip, int size) {
         if (ip.type == T_DEV)
             return -1;
         if (size > MAXFILESIZE)
@@ -322,8 +354,8 @@ final int root_inode_number = 1;
         if (size < ip.size) {
             int n = divceil(ip.size, BSIZE);  // # of used blocks
             int k = divceil(size, BSIZE);      // # of blocks to keep
-            int nd = min(n, NDIRECT);          // # of used direct blocks
-            int kd = min(k, NDIRECT);          // # of direct blocks to keep
+            int nd = Math.min(n, NDIRECT);          // # of used direct blocks
+            int kd = Math.min(k, NDIRECT);          // # of direct blocks to keep
             for (int i = kd; i < nd; i++) {
                 bfree(img, ip.addrs[i]);
                 ip.addrs[i] = 0;
@@ -332,9 +364,9 @@ final int root_inode_number = 1;
             if (n > NDIRECT) {
                 int iaddr = ip.addrs[NDIRECT];
                 assert(iaddr != 0);
-                uint *iblock = (uint *)img[iaddr];
-                int ni = max(n - NDIRECT, 0);  // # of used indirect blocks
-                int ki = max(k - NDIRECT, 0);  // # of indirect blocks to keep
+                int *iblock = (int *)img[iaddr];
+                int ni = Math.max(n - NDIRECT, 0);  // # of used indirect blocks
+                int ki = Math.max(k - NDIRECT, 0);  // # of indirect blocks to keep
                 for (int i = ki; i < ni; i++) {
                     bfree(img, iblock[i]);
                     iblock[i] = 0;
@@ -348,8 +380,8 @@ final int root_inode_number = 1;
         else {
             int n = size - ip.size; // # of bytes to be filled
             for (int off = ip.size, t = 0, m = 0; t < n; t += m, off += m) {
-                uchar *bp = img[bmap(img, ip, off / BSIZE)];
-                m = min(n - t, BSIZE - off % BSIZE);
+                String bp = img[bmap(img, ip, off / BSIZE)];
+                m = Math.min(n - t, BSIZE - off % BSIZE);
                 memset(bp + off % BSIZE, 0, m);
             }
         }
@@ -363,23 +395,24 @@ final int root_inode_number = 1;
      */
 
     // check if s is an empty string
-    boolean is_empty(String s) {
+    static boolean is_empty(String s) {
         return s.equals("");
     }
 
     // check if c is a path separator
-    boolean is_sep(char c) {
+    static boolean is_sep(char c) {
         return c == '/';
     }
 
 // adapted from skipelem in xv6/fs.c
-    String skipelem(String path, String name) {
-        while (is_sep(*path))
-        path++;
+    static String skipelem(char[] path, String name) {
+        int i=0;
+        while (is_sep(path[0]))
+        i++;
         String s = path;
         while (!is_empty(path) && !is_sep(*path))
         path++;
-        int len = min(path - s, DIRSIZ);
+        int len = Math.min(path - s, DIRSIZ);
         memmove(name, s, len);
         if (len < DIRSIZ)
             name[len] = 0;
@@ -387,8 +420,8 @@ final int root_inode_number = 1;
     }
 
 // split the path into directory name and base name
-    char *splitpath(char *path, char *dirbuf, uint size) {
-        char *s = path, *t = path;
+    static String splitpath(String path, String dirbuf, int size) {
+        String s = path, t = path;
         while (!is_empty(path)) {
             while (is_sep(*path))
             path++;
@@ -396,8 +429,8 @@ final int root_inode_number = 1;
             while (!is_empty(path) && !is_sep(*path))
             path++;
         }
-        if (dirbuf != NULL) {
-            int n = min(s - t, size - 1);
+        if (dirbuf != null) {
+            int n = Math.min(s - t, size - 1);
             memmove(dirbuf, t, n);
             dirbuf[n] = 0;
         }
@@ -409,81 +442,81 @@ final int root_inode_number = 1;
      */
 
     // search a file (name) in a directory (dp)
-    inode_t dlookup(img_t img, inode_t dp, char *name, uint *offp) {
-        assert(dp->type == T_DIR);
-        struct dirent de;
-        for (uint off = 0; off < dp->size; off += sizeof(de)) {
+    static inode_t dlookup(MappedByteBuffer img, inode_t dp, String name, int offp) {
+        assert(dp.type == T_DIR);
+        dirent de;
+        for (int off = 0; off < dp.size; off += sizeof(de)) {
             if (iread(img, dp, (uchar *)&de, sizeof(de), off) != sizeof(de)) {
-                derror("dlookup: %s: read error\n", name);
-                return NULL;
+                derror("dlookup: %s: read error", name);
+                return null;
             }
             if (strncmp(name, de.name, DIRSIZ) == 0) {
-                if (offp != NULL)
-                *offp = off;
+//                if (offp != null)
+                offp = off;
                 return iget(img, de.inum);
             }
         }
-        return NULL;
+        return null;
     }
 
     // add a new directory entry in dp
-    int daddent(img_t img, inode_t dp, char *name, inode_t ip) {
-        struct dirent de;
+    static int daddent(MappedByteBuffer img, inode_t dp, String name, inode_t ip) {
+        dirent de;
         int off;
         // try to find an empty entry
         for (off = 0; off < dp.size; off += sizeof(de)) {
-            if (iread(img, dp, (uchar *)&de, sizeof(de), off) != sizeof(de)) {
-                derror("daddent: %u: read error\n", geti(img, dp));
+            if (iread(img, dp, (char *)&de, sizeof(de), off) != sizeof(de)) {
+                derror("daddent: %u: read error", geti(img, dp));
                 return -1;
             }
             if (de.inum == 0)
                 break;
             if (strncmp(de.name, name, DIRSIZ) == 0) {
-                derror("daddent: %s: exists\n", name);
+                derror("daddent: %s: exists", name);
                 return -1;
             }
         }
         strncpy(de.name, name, DIRSIZ);
-        de.inum = geti(img, ip);
+        de.inum = (short)geti(img, ip);
         if (iwrite(img, dp, (uchar *)&de, sizeof(de), off) != sizeof(de)) {
-            derror("daddent: %u: write error\n", geti(img, dp));
+            derror("daddent: %u: write error", geti(img, dp));
             return -1;
         }
         if (strncmp(name, ".", DIRSIZ) != 0)
-            ip->nlink++;
+            ip.nlink++;
         return 0;
     }
 
     // create a link to the parent directory
-    int dmkparlink(img_t img, inode_t pip, inode_t cip) {
-        if (pip->type != T_DIR) {
-            derror("dmkparlink: %d: not a directory\n", geti(img, pip));
+    static int dmkparlink(MappedByteBuffer img, inode_t pip, inode_t cip) {
+        if (pip.type != T_DIR) {
+            derror("dmkparlink: %d: not a directory", geti(img, pip));
             return -1;
         }
-        if (cip->type != T_DIR) {
-            derror("dmkparlink: %d: not a directory\n", geti(img, cip));
+        if (cip.type != T_DIR) {
+            derror("dmkparlink: %d: not a directory", geti(img, cip));
             return -1;
         }
         int off;
         dlookup(img, cip, "..", &off);
-        struct dirent de;
-        de.inum = geti(img, pip);
+        dirent de;
+        de.inum = (short)geti(img, pip);
         strncpy(de.name, "..", DIRSIZ);
         if (iwrite(img, cip, (uchar *)&de, sizeof(de), off) != sizeof(de)) {
-            derror("dmkparlink: write error\n");
+            derror("dmkparlink: write error");
             return -1;
         }
-        pip->nlink++;
+        pip.nlink++;
         return 0;
     }
 
 
     // returns the inode number of a file (rp/path)
-    inode_t ilookup(img_t img, inode_t rp, char *path) {
-        char name[DIRSIZ + 1];
+    static inode_t ilookup(MappedByteBuffer img, inode_t rp, String path) {
+        char[] name = new char[DIRSIZ + 1];
         name[DIRSIZ] = 0;
         while (true) {
-            assert(path != NULL && rp != NULL && rp->type == T_DIR);
+            assert(path != null && rp != null && rp.type == T_DIR);
             path = skipelem(path, name);
             // if path is empty (or a sequence of path separators),
             // it should specify the root direcotry (rp) itself
@@ -495,8 +528,8 @@ final int root_inode_number = 1;
                 return null;
             if (is_empty(path))
                 return ip;
-            if (ip->type != T_DIR) {
-                derror("ilookup: %s: not a directory\n", name);
+            if (ip.type != T_DIR) {
+                derror("ilookup: %s: not a directory", name);
                 return null;
             }
             rp = ip;
@@ -504,21 +537,21 @@ final int root_inode_number = 1;
     }
 
     // create a file
-    inode_t icreat(img_t img, inode_t rp, String path, int type, inode_t *dpp) {
-        char name[DIRSIZ + 1];
+    static inode_t icreat(MappedByteBuffer img, inode_t rp, String path, int type, inode_t[] dpp) {
+        char[] name = new char[DIRSIZ + 1];
         name[DIRSIZ] = 0;
         while (true) {
-            assert(path != NULL && rp != NULL && rp.type == T_DIR);
+            assert(path != null && rp != null && rp.type == T_DIR);
             path = skipelem(path, name);
             if (is_empty(name)) {
-                derror("icreat: %s: empty file name\n", path);
+                derror("icreat: %s: empty file name", path);
                 return null;
             }
 
             inode_t ip = dlookup(img, rp, name, null);
             if (is_empty(path)) {
                 if (ip != null) {
-                    derror("icreat: %s: file exists\n", name);
+                    derror("icreat: %s: file exists", name);
                     return null;
                 }
                 ip = ialloc(img, type);
@@ -532,7 +565,7 @@ final int root_inode_number = 1;
                 return ip;
             }
             if (ip == null || ip->type != T_DIR) {
-                derror("icreat: %s: no such directory\n", name);
+                derror("icreat: %s: no such directory", name);
                 return null;
             }
             rp = ip;
@@ -540,11 +573,11 @@ final int root_inode_number = 1;
     }
 
     // checks if dp is an empty directory
-    boolean emptydir(img_t img, inode_t dp) {
+    static boolean emptydir(MappedByteBuffer img, inode_t dp) {
         int nent = 0;
-        struct dirent de;
-        for (uint off = 0; off < dp.size; off += sizeof(de)) {
-            iread(img, dp, (uchar *)&de, sizeof(de), off);
+        dirent de;
+        for (int off = 0; off < dp.size; off += sizeof(de)) {
+            iread(img, dp, (char *)&de, sizeof(de), off);
             if (de.inum != 0)
                 nent++;
         }
@@ -552,14 +585,14 @@ final int root_inode_number = 1;
     }
 
     // unlinks a file (dp/path)
-    int iunlink(img_t img, inode_t rp, String path) {
-        char name[DIRSIZ + 1];
+    static int iunlink(MappedByteBuffer img, inode_t rp, String path) {
+        char[] name = new char[DIRSIZ + 1];
         name[DIRSIZ] = 0;
         while (true) {
             assert(path != null && rp != null && rp.type == T_DIR);
             path = skipelem(path, name);
             if (is_empty(name)) {
-                derror("iunlink: empty file name\n");
+                derror("iunlink: empty file name");
                 return -1;
             }
             int off;
@@ -567,14 +600,14 @@ final int root_inode_number = 1;
             if (ip != null && is_empty(path)) {
                 if (strncmp(name, ".", DIRSIZ) == 0 ||
                         strncmp(name, "..", DIRSIZ) == 0) {
-                    derror("iunlink: cannot unlink \".\" or \"..\"\n");
+                    derror("iunlink: cannot unlink \".\" or \"..\"");
                     return -1;
                 }
                 // erase the directory entry
-                uchar zero[sizeof(struct dirent)];
+                char zero = new char[sizeof(dirent)];
                 memset(zero, 0, sizeof(zero));
                 if (iwrite(img, rp, zero, sizeof(zero), off) != sizeof(zero)) {
-                    derror("iunlink: write error\n");
+                    derror("iunlink: write error");
                     return -1;
                 }
                 if (ip.type == T_DIR && dlookup(img, ip, "..", null) == rp)
@@ -588,7 +621,7 @@ final int root_inode_number = 1;
                 return 0;
             }
             if (ip == null || ip.type != T_DIR) {
-                derror("iunlink: %s: no such directory\n", name);
+                derror("iunlink: %s: no such directory", name);
                 return -1;
             }
             rp = ip;
